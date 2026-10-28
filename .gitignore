@@ -1,0 +1,10 @@
+# Generated mod output and downloaded sprites stay local
+out/
+.pokecache/
+
+# Build artifacts (if converted to a project later)
+bin/
+obj/
+*.csproj.user
+.vs/
+.idea/

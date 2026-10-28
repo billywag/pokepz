@@ -70,3 +70,5 @@ PokeZomboid.getSpriteTexture(s.id)              -- client only
 - [ ] Party UI using sprite textures
 - [ ] Companion creatures on the B42 animal system
 - [ ] Combat vs. zombies with type multipliers
+
+Full phased plan, data model and open questions: [PLAN.md](PLAN.md).

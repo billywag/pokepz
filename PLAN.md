@@ -22,10 +22,11 @@ Status legend: `[x]` done · `[ ]` todo · `(verify)` = confirm against the actu
 - [x] Disk cache keyed by `SHA1(url)` uppercase hex in `.pokecache/`
 - [x] Lua helpers: `getSpecies`, `typeMultiplier`, `statAtLevel`, `levelEvolution`, `getSpriteTexture`
 - [x] Verified: compiles on .NET 10; mocked-cache run; generated Lua loads in Lua 5.1 and helpers return correct values
-- [ ] **First live run** against PokeAPI (`--gen 1`), load in game, confirm `[PokeZomboid] Loaded 151 species, 18 types` in `console.txt`
-- [ ] Fix cosmetic progress-line race (`Species: 2/2Species: 1/2`) — print from a single place after `Interlocked.Increment`, or throttle with a lock
-- [ ] Move hand-written Lua (`Helpers.lua`, `PokeZomboid_Client.lua`) out of C# string literals into `mod/` source files; fetcher copies `mod/**` into `out/PokeZomboid/42/` verbatim. Easier to edit and lint.
-- [ ] Add `expForLevel(growthRate, level)` to helpers (formulas below)
+- [x] Live fetch against PokeAPI (`--gen 1`): 151 species, 72 evolution links, 18 types, 151 sprites, 6 growth rates
+- [ ] **Load in game**, confirm `[PokeZomboid] Loaded 151 species, 18 types` in `console.txt`
+- [x] Fix cosmetic progress-line race (`Species: 2/2Species: 1/2`) — print from a single place after `Interlocked.Increment`, or throttle with a lock
+- [x] Move hand-written Lua (`Helpers.lua`, `PokeZomboid_Client.lua`) out of C# string literals into `mod/` source files; fetcher copies `mod/**` into `out/PokeZomboid/42/` verbatim. Easier to edit and lint.
+- [x] Add `expForLevel(growthRate, level)` / `levelForExp(growthRate, exp)` to helpers, backed by generated `GrowthRates.lua` (PokeAPI tables, not formulas)
 - [ ] Optional: `--moves` flag to fetch level-up learnsets for a later moves system (skip for now; Phase 5 uses type-based attacks)
 
 **Growth-rate formulas** (n = level):

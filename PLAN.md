@@ -71,6 +71,10 @@ tests/
 - `Party.add(player, creature)` → party if < 6, else box
 - `Party.addExp(creature, amount)` → handles level-ups, returns list of events (`levelUp`, `canEvolve`)
 - `Party.evolve(creature, toSpeciesId)` — keeps uid/nickname/level, recalculates HP proportionally
+- [x] `tests/run.lua` harness + made-up fixtures (no real species data in the repo)
+- [x] `Party.lua`: ensure/migrate, newCreature, add, findByUid, addExp, evolve, heal — tested
+- [x] `Capture.lua`: ballBonus, chance, roll (a >= 255 auto-catches) — tested
+- [ ] `PokeZomboid_Server.lua` authoritative mutations (needs B42 command APIs verified)
 - [ ] Debug (client, only when `isDebugEnabled()` (verify)): give creature by id/name, set level, heal party, wipe save data, print party to console
 
 **Tests:** `lua5.1 tests/run.lua` — stub `Events`, `getTexture`, `ZombRand` (wrap `math.random`), `getGameTime`. Run on every change.

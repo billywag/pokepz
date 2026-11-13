@@ -14,6 +14,7 @@
 //   --art <sprite | official>      Small game sprites (default) or large official artwork
 //   --out <dir>                    Where the PokeZomboid mod folder is written (default: ./out)
 //   --cache <dir>                  JSON cache folder (default: ./.pokecache)
+//   --mod <dir>                    Hand-written mod sources copied into the output (default: ./mod)
 //   --concurrency <n>              Parallel requests (default: 4 — be nice to PokeAPI)
 //
 // Re-runs are fast: every API response is cached on disk, and existing sprites are skipped.
@@ -32,10 +33,18 @@ var api = new PokeApi(opt.CacheDir, opt.Concurrency);
 var modRoot = Path.Combine(opt.OutDir, "PokeZomboid");
 var b42 = Path.Combine(modRoot, "42");
 var luaShared = Path.Combine(b42, "media", "lua", "shared", "PokeZomboid");
-var luaClient = Path.Combine(b42, "media", "lua", "client");
 var spriteDir = Path.Combine(b42, "media", "ui", "PokeZomboid", "sprites");
-foreach (var d in new[] { Path.Combine(modRoot, "common"), luaShared, luaClient, spriteDir })
+if (!Directory.Exists(opt.ModDir))
+    throw new DirectoryNotFoundException($"Mod source folder not found: {Path.GetFullPath(opt.ModDir)} (run from the repo root or pass --mod)");
+foreach (var d in new[] { Path.Combine(modRoot, "common"), luaShared, spriteDir })
     Directory.CreateDirectory(d);
+
+// Progress lines are written from parallel tasks; one lock keeps increment + print in order
+var consoleLock = new object();
+void Progress(string label, ref int counter, int total)
+{
+    lock (consoleLock) Console.Write($"\r{label}: {++counter}/{total}");
+}
 
 Console.WriteLine($"Generations: {string.Join(",", opt.Generations)} | Art: {opt.Art} | Out: {Path.GetFullPath(modRoot)}");
 
@@ -96,6 +105,17 @@ for (int i = 0; i < typeNames.Count; i++)
 }
 Console.WriteLine($"Types: {typeChart.Count}");
 
+// ---------------------------------------------------------------- 4b. Growth rates (exact XP per level 1-100)
+var rateList = await api.GetJson("https://pokeapi.co/api/v2/growth-rate/?limit=100");
+var rateNodes = await Task.WhenAll(rateList["results"]!.AsArray()
+    .Select(r => api.GetJson(r!["url"]!.GetValue<string>())));
+var growthRates = new SortedDictionary<string, List<int>>();
+foreach (var r in rateNodes)
+    growthRates[r["name"]!.GetValue<string>()] = r["levels"]!.AsArray()
+        .OrderBy(l => l!["level"]!.GetValue<int>())
+        .Select(l => l!["experience"]!.GetValue<int>()).ToList();
+Console.WriteLine($"Growth rates: {growthRates.Count}");
+
 // ---------------------------------------------------------------- 5. Sprites
 int spritesDone = 0, spritesMissing = 0;
 await Task.WhenAll(species.Select(async s =>
@@ -104,7 +124,7 @@ await Task.WhenAll(species.Select(async s =>
     var path = Path.Combine(spriteDir, $"{s.Id}.png");
     if (!File.Exists(path))
         await File.WriteAllBytesAsync(path, await api.GetBytes(s.SpriteUrl));
-    Console.Write($"\rSprites: {Interlocked.Increment(ref spritesDone)}/{species.Count}");
+    Progress("Sprites", ref spritesDone, species.Count);
 }));
 Console.WriteLine(spritesMissing > 0 ? $"  ({spritesMissing} species had no sprite)" : "");
 
@@ -167,73 +187,26 @@ foreach (var (atk, row) in typeChart)
 sb.AppendLine("}");
 File.WriteAllText(Path.Combine(luaShared, "TypeChart.lua"), sb.ToString(), utf8);
 
-// Helpers.lua — hand-written logic, regenerated each run so it stays in sync with the data shape
-File.WriteAllText(Path.Combine(luaShared, "Helpers.lua"), """
-    -- PokeZomboid helpers (shared: safe on client and server)
-    PokeZomboid = PokeZomboid or {}
+// GrowthRates.lua — total XP required for each level, indexed by level (1-100)
+sb.Clear();
+sb.AppendLine(stamp);
+sb.AppendLine("PokeZomboid = PokeZomboid or {}");
+sb.AppendLine("PokeZomboid.GrowthRates = {");
+foreach (var (name, levels) in growthRates)
+    sb.AppendLine($"    [{L(name)}] = {{ {string.Join(", ", levels)} }},");
+sb.AppendLine("}");
+File.WriteAllText(Path.Combine(luaShared, "GrowthRates.lua"), sb.ToString(), utf8);
 
-    -- Look up by national dex id (number) or key ("pikachu")
-    function PokeZomboid.getSpecies(idOrKey)
-        if type(idOrKey) == "number" then return PokeZomboid.Species[idOrKey] end
-        if not PokeZomboid._byKey then
-            PokeZomboid._byKey = {}
-            for _, s in pairs(PokeZomboid.Species) do PokeZomboid._byKey[s.key] = s end
-        end
-        return PokeZomboid._byKey[idOrKey]
-    end
-
-    -- Damage multiplier of an attacking type against a list of defender types
-    function PokeZomboid.typeMultiplier(attackType, defenderTypes)
-        local row = PokeZomboid.TypeChart[attackType] or {}
-        local m = 1
-        for _, t in ipairs(defenderTypes) do
-            local v = row[t]
-            if v ~= nil then m = m * v end
-        end
-        return m
-    end
-
-    function PokeZomboid.getEvolutions(id)
-        return PokeZomboid.Evolutions[id] or {}
-    end
-
-    -- Main-series stat formula, simplified: no IVs/EVs, neutral nature
-    function PokeZomboid.statAtLevel(species, stat, level)
-        local base = species.stats[stat]
-        if stat == "hp" then
-            return math.floor((2 * base * level) / 100) + level + 10
-        end
-        return math.floor((2 * base * level) / 100) + 5
-    end
-
-    -- Returns the first level-up evolution this species qualifies for at the given level, or nil
-    function PokeZomboid.levelEvolution(id, level)
-        for _, e in ipairs(PokeZomboid.getEvolutions(id)) do
-            if e.trigger == "level-up" and e.minLevel and level >= e.minLevel then return e end
-        end
-        return nil
-    end
-    """ + "\n", utf8);
-
-// Client: load check + sprite helper
-File.WriteAllText(Path.Combine(luaClient, "PokeZomboid_Client.lua"), """
-    -- PokeZomboid client bootstrap
-    PokeZomboid = PokeZomboid or {}
-
-    function PokeZomboid.getSpriteTexture(id)
-        local s = PokeZomboid.Species[id]
-        if not s or not s.sprite then return nil end
-        return getTexture(s.sprite)
-    end
-
-    local function onGameStart()
-        local n = 0
-        for _ in pairs(PokeZomboid.Species or {}) do n = n + 1 end
-        print("[PokeZomboid] Loaded " .. n .. " species, " .. #(PokeZomboid.Types or {}) .. " types")
-    end
-
-    Events.OnGameStart.Add(onGameStart)
-    """ + "\n", utf8);
+// Hand-written mod sources (mod/**) are copied verbatim on top of the generated data
+int copied = 0;
+foreach (var src in Directory.EnumerateFiles(opt.ModDir, "*", SearchOption.AllDirectories))
+{
+    var dest = Path.Combine(b42, Path.GetRelativePath(opt.ModDir, src));
+    Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+    File.Copy(src, dest, overwrite: true);
+    copied++;
+}
+Console.WriteLine($"Copied {copied} file(s) from {opt.ModDir}");
 
 Console.WriteLine($"Done. Mod written to {Path.GetFullPath(modRoot)}");
 
@@ -276,7 +249,7 @@ async Task<Species> LoadSpecies(string url)
         SpriteUrl: sprite,
         ChainUrl: s["evolution_chain"]?["url"]?.GetValue<string>());
 
-    Console.Write($"\rSpecies: {Interlocked.Increment(ref done)}/{speciesRefs.Count}");
+    Progress("Species", ref done, speciesRefs.Count);
     return result;
 }
 
@@ -333,6 +306,7 @@ sealed class Options
     public string Art { get; private set; } = "sprite";
     public string OutDir { get; private set; } = "out";
     public string CacheDir { get; private set; } = ".pokecache";
+    public string ModDir { get; private set; } = "mod";
     public int Concurrency { get; private set; } = 4;
 
     public static Options Parse(string[] args)
@@ -356,6 +330,7 @@ sealed class Options
                     break;
                 case "--out": o.OutDir = Environment.ExpandEnvironmentVariables(Next()); break;
                 case "--cache": o.CacheDir = Environment.ExpandEnvironmentVariables(Next()); break;
+                case "--mod": o.ModDir = Environment.ExpandEnvironmentVariables(Next()); break;
                 case "--concurrency": o.Concurrency = Math.Clamp(int.Parse(Next()), 1, 16); break;
                 default: throw new ArgumentException($"Unknown option {args[i]}");
             }
